@@ -518,6 +518,12 @@ body{max-width:none;padding:0;margin:0}
   .demo{max-width:none;padding:0 12px 24px}
 }
 
+.fam-list li > div:first-child{min-width:0;flex:1}
+.fam-list li > :last-child:not(:first-child){flex:none}
+.chip{flex:none}
+.skill{display:inline-block;margin:2px 4px 2px 0}
+.loc-ask{border:1px solid var(--warn);border-radius:10px;padding:10px 12px;background:#2a2412;font-size:12.5px}
+.loc-ask[hidden]{display:none}
 .tip{position:fixed;pointer-events:none;background:#2c2c2a;border:1px solid rgba(255,255,255,.15);color:var(--ink);font-size:12px;padding:7px 9px;border-radius:8px;z-index:10;box-shadow:0 4px 18px rgba(0,0,0,.4)}
 .tip[hidden]{display:none}
 .tip .row{display:flex;align-items:center;gap:6px}
@@ -612,6 +618,7 @@ footer li{margin:3px 0}
       </div>
       <label for="helpDetail">Details (optional)</label>
       <input type="text" id="helpDetail" maxlength="120" placeholder="e.g. Door jammed in corridor F, two of us inside">
+      <div class="loc-ask" id="helpLocAsk" hidden></div>
       <div class="btns"><button type="submit" class="danger-btn">Send for help</button><button type="button" class="ghost" id="helpCancel">Cancel</button></div>
       <span class="note">Your family sees exactly what you need, and the right responder is assigned automatically.</span>
     </form>
@@ -1589,7 +1596,7 @@ function tick() {
     if (s.status === 'ok' && f.mins == null) s.predicted = false;
     renderSensor(s);
   });
-  processMed(); powerTick(); foodTick(); chatTick(); processTasks(); trafficTick(); estimatePositions(); shelterTick(); exploreTick(); scoutTick(); moveTick(); renderHome();
+  processMed(); powerTick(); foodTick(); chatTick(); processTasks(); trafficTick(); if (tamperedTank && auditTask) renderReserve(); estimatePositions(); shelterTick(); exploreTick(); scoutTick(); moveTick(); renderHome();
   // blackout
   const nowOut = p.value <= 1;
   if (nowOut !== blackout) {
@@ -2463,6 +2470,7 @@ function buildDonate() {
 
 /* ---------------- purified water reserve (tamper-evident ledger) ---------------- */
 const PURE_LIMIT = 2;
+let auditTask = null, auditBy = '';
 let tanks = [], ledger = [], ledgerCopies = [], tamperedTank = null, ledgerOk = true, badEntry = null;
 async function sha(text) {
   if (cryptoOK) { try { return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))); } catch (e) { /* fall back */ } }
@@ -2510,6 +2518,12 @@ async function renderReserve() {
   }).join('');
   const st = $('#ledgerStatus');
   st.innerHTML = ledgerOk ? `<b style="color:var(--good)">✓</b> Ledger verified: ${ledger.length} entries, every hash links to the one before it.` : `<b style="color:var(--crit)">✕</b> <b style="color:var(--ink)">Tampering detected at entry #${badEntry}.</b> Its hash no longer matches.`;
+  if (tamperedTank && auditTask) {
+    const at = auditTask;
+    st.innerHTML += at.status === 'active'
+      ? `<br><b style="color:var(--ink)">Task #${at.id}:</b> ${at.assigned.join(' and ')} ${simMinutes < at.startAt ? `is on the way (arrives ~${fmtTime(at.startAt)})` : `is checking the tank (done ~${fmtTime(at.doneAt)})`} and will restore the records from mesh copies.`
+      : `<br><b style="color:var(--ink)">Task #${at.id}:</b> waiting for a free volunteer to check the tank. You can also restore the records yourself.`;
+  }
   $('#btnTamper').textContent = 'Restore from mesh copies'; $('#btnTamper').hidden = !tamperedTank;
   $('#ledger').innerHTML = [...ledger].reverse().map(e => {
     const what = e.action === 'add' ? `Added ${e.liters} L to ${e.tank} · tested ${e.ppm.toFixed(1)} ppm` : e.action === 'withdraw' ? `Released ${e.liters} L from ${e.tank} to ${e.to}` : e.action === 'reject' ? `Rejected ${e.liters} L for ${e.tank} · tested ${e.ppm.toFixed(1)} ppm (over ${PURE_LIMIT})` : `Audit of ${e.tank}: ${e.to}`;
@@ -2561,7 +2575,9 @@ function buildReserve() {
       e.liters -= 300; tamperedTank = t;
       await renderReserve();
       t.locked = !ledgerOk; await renderReserve();
-      raiseAlert({ level: 'danger', source: 'reserve', label: 'Purified water reserve', node: 'L41-4', title: `Tampering detected in the water ledger (entry #${badEntry})`, body: 'Someone edited a past record. Tank T-2 is locked until it is checked.' });
+      raiseAlert({ level: 'danger', source: 'reserve', label: 'Purified water reserve', node: 'L41-4', title: `Tampering detected in the water ledger (entry #${badEntry})`, body: 'Someone edited a past record. Tank T-2 is locked, and a volunteer is on the way to check it.' });
+      auditTask = addTask({ title: 'Check water Tank T-2 and restore the records', cat: 'repair', level: 'L41', crit: 'high', need: 1, reserveAudit: true, note: 'Created automatically when the water-ledger tampering was detected.' });
+      processTasks(); await renderReserve();
     } else {
       // Every mesh node kept a copy of the ledger, so the honest version is restored and the missing water is exposed.
       ledger = ledgerCopies.map(x => ({ ...x }));
@@ -2569,7 +2585,7 @@ function buildReserve() {
       await appendEntry({ t: simMinutes, tank: t.id, action: 'audit', liters: missing, ppm: 0, to: `${missing} L missing. Records restored from ${Object.values(nodes).filter(n => n.up).length} mesh copies. Theft reported.` });
       t.locked = false; tamperedTank = null;
       await renderReserve();
-      $('#rsvNote').textContent = `Honest records restored from the mesh. ${missing} L were stolen from Tank ${t.id}, and the theft is now on record for everyone.`;
+      $('#rsvNote').textContent = `${auditBy ? auditBy + ' checked the tank and restored' : 'Restored'} the honest records from the mesh. ${missing} L were stolen from Tank ${t.id}, and the theft is now on record for everyone.`; auditBy = ''; auditTask = null;
       raiseAlert({ level: 'warn', source: 'reserve', label: 'Purified water reserve', node: 'L41-4', title: `${missing} L stolen from Tank ${t.id}`, body: 'The ledger was restored from mesh copies. The edit exposed the theft instead of hiding it.' });
     }
   });
@@ -2627,6 +2643,7 @@ function processTasks() {
     t.status = 'done'; t.doneTime = now;
     t.assigned.forEach(n => { const w = [...vols, ...crew, meVol].filter(Boolean).find(v => v.name === n); if (w) { w.done++; w.busy = null; } });
     if (meVol && t.assigned.includes(meVol.name)) { credits += EARN; $('#volNote').innerHTML = `<b style="color:var(--good)">✓</b> You finished task #${t.id} and earned ${EARN} credits.`; }
+    if (t.reserveAudit && tamperedTank) { auditBy = t.assigned.join(' and '); $('#btnTamper').click(); }
     if (t.auto && S[t.auto]) {
       const s = S[t.auto]; s.drift = 0;
       const b = document.querySelector(`[data-scn="${t.auto}"]`); if (b) { b.textContent = SCN[t.auto].on; b.classList.remove('active'); }
@@ -2771,21 +2788,44 @@ function routeHelp(kind, urg, levelKey, people, who, detail) {
 function buildHelpForm() {
   $('#helpKinds').innerHTML = Object.entries(HELP).map(([k, v], i) => `<label><input type="radio" name="helpKind" value="${k}" ${i === 0 ? 'checked' : ''}> ${v}</label>`).join('');
   $('#btnHelp').addEventListener('click', () => { $('#helpForm').hidden = false; $('#helpDetail').focus(); });
-  $('#helpCancel').addEventListener('click', () => { $('#helpForm').hidden = true; });
+  $('#helpCancel').addEventListener('click', () => { $('#helpForm').hidden = true; $('#helpLocAsk').hidden = true; helpLoc = null; });
   $('#helpForm').addEventListener('submit', e => {
     e.preventDefault();
     const kind = document.querySelector('input[name=helpKind]:checked').value;
     const urg = $('#helpUrg').value, detail = $('#helpDetail').value.trim();
     const people = clamp(parseInt($('#helpPeople').value, 10) || 1, 1, 20);
-    if (kind === 'lost' && $('#shareSel').value === 'none') { $('#shareSel').value = 'fam+resp'; renderLocPanel(); }
-    const routed = routeHelp(kind, urg, 'L41', people, 'a resident', detail);
-    me = { status: 'help', last: simMinutes, kind, urg, detail, routed };
+    const share = $('#shareSel').value;
+    const respCanSee = share === 'fam+resp' || share === 'resp';
+    // responders can't see you: ask first instead of sharing anyway
+    if (!respCanSee && !helpLoc) { askHelpLocation(share); return; }
+    if (helpLoc === 'none' && !detail) { $('#helpLocAsk').innerHTML = '<b style="color:var(--crit)">✕</b> Without your location, responders need to know where you are. Add it in Details (for example "Corridor F, unit 12"), then press Send for help.'; $('#helpLocAsk').hidden = false; $('#helpDetail').focus(); return; }
+    let locNote;
+    if (respCanSee) locNote = 'Responders can see your location.';
+    else if (helpLoc === 'once') locNote = 'Your location is shared with responders for this request only.';
+    else if (helpLoc === 'on') { $('#shareSel').value = share === 'fam' ? 'fam+resp' : 'resp'; renderLocPanel(); locNote = 'Location sharing with responders is now on.'; }
+    else locNote = 'Your location was NOT shared. Responders will use your description.';
+    const routed = routeHelp(kind, urg, 'L41', people, 'a resident', detail) + ' ' + locNote;
+    me = { status: 'help', last: simMinutes, kind, urg, detail, routed, locShared: helpLoc !== 'none' };
+    helpLoc = null; $('#helpLocAsk').hidden = true;
     $('#helpForm').hidden = true; $('#helpDetail').value = '';
     renderFamily();
     raiseAlert({ level: urg === 'normal' ? 'warn' : 'sos', source: 'you', label: 'Your phone, Level 41', node: YOU,
       title: `${urg === 'critical' ? 'SOS' : 'Help request'} from Level 41: ${HELP[kind]}${people > 1 ? ` (${people} people)` : ''}`,
       body: `${detail ? `“${detail}” · ` : ''}${routed}` });
   });
+}
+let helpLoc = null;
+function askHelpLocation(share) {
+  const box = $('#helpLocAsk');
+  box.innerHTML = `<div class="fam-name">${share === 'none' ? 'Your location is hidden from everyone.' : 'Only your family can see your location.'}</div>
+    <div class="fam-sub" style="margin:2px 0 8px">Medics and volunteers find you much faster if they can see where you are. What do you want to do?</div>
+    <div class="btns" style="flex-direction:column;align-items:stretch">
+      <button type="button" data-loc="once">Share with responders for this request only</button>
+      <button type="button" data-loc="on">Turn on sharing with responders</button>
+      <button type="button" class="ghost" data-loc="none">Send without my location</button>
+    </div>`;
+  box.hidden = false;
+  box.querySelectorAll('[data-loc]').forEach(b => b.addEventListener('click', () => { helpLoc = b.dataset.loc; $('#helpForm').requestSubmit(); }));
 }
 function familyNeedsHelp(f) {
   const [kind, detail] = FAM_HELP[famKey(f)] || ['other', ''];
@@ -2919,7 +2959,7 @@ function renderLocPanel() {
   const you = people.find(p => p.id === 'you');
   $('#myLoc').textContent = `${LEVEL_NAMES[you.level]} · ${zoneAt(you.level, you.x, you.y)} · ±${Math.round(you.acc * 0.5)} m, from the 3 nearest mesh nodes`;
   const v = $('#shareSel').value;
-  $('#shareNote').textContent = { 'fam+resp': 'Your family and medics or volunteers helping you can see roughly where you are. The location is encrypted, so the Directorate can\'t.', fam: 'Only your family can see your location.', resp: 'Only medics and volunteers assigned to help you can see your location.', none: 'Nobody can see your location. If you send for help, you\'ll be asked to share it.' }[v];
+  $('#shareNote').textContent = { 'fam+resp': 'Your family and medics or volunteers helping you can see roughly where you are. The location is encrypted, so the Directorate can\'t.', fam: 'Only your family can see your location.', resp: 'Only medics and volunteers assigned to help you can see your location.', none: 'Nobody can see your location. If you send for help, you\'ll be asked whether to share it.' }[v];
   if (!$('#locList')) return;
   $('#locList').innerHTML = family.map(f => {
     const p = people.find(q => q.id === famKey(f));

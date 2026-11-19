@@ -2,7 +2,7 @@
 
 **A community-owned phone app for life underground.** Built for Patriot HackFest Fall 2026 ("Life underground").
 
-**Live demo:** https://YOUR-USERNAME.github.io/hollow-signal/
+**Live demo:** https://zsmith17.github.io/hollow-signal/
 
 ## The problem
 
